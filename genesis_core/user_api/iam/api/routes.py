@@ -58,6 +58,12 @@ class GetMyRolesAction(routes.Action):
     __controller__ = controllers.UserController
 
 
+class GetCaptchaAction(routes.Action):
+    """Handler for .../users/<uuid>/actions/get_captcha endpoint"""
+
+    __controller__ = controllers.UserController
+
+
 class ResendEmailConfirmationAction(routes.Action):
     """Handler for .../actions/resend_email_confirmation/invoke endpoint"""
 
@@ -98,6 +104,7 @@ class UserRoute(routes.Route):
     confirm_email = routes.action(ConfirmEmailAction, invoke=True)
     force_confirm_email = routes.action(ForceConfirmEmailAction, invoke=True)
     reset_password = routes.action(ResetPasswordAction, invoke=True)
+    get_captcha = routes.action(GetCaptchaAction)
 
 
 class OrganizationController(routes.Route):

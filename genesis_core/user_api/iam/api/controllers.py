@@ -14,16 +14,20 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import datetime
 import errno
+import json
 from os import path as os_path
 import mimetypes
 import re
 import string
 from urllib import parse as urllib_parse
 
+import altcha
 from authlib.integrations import requests_client
 import jinja2
 from gcl_iam import controllers as iam_controllers
+from oslo_config import cfg
 from restalchemy.api import actions
 from restalchemy.api import controllers
 from restalchemy.api import resources
@@ -33,11 +37,48 @@ from restalchemy.dm import filters as ra_filters
 from restalchemy.openapi import utils as oa_utils
 import pyotp
 
+from genesis_core.common import constants as common_c
 from genesis_core.user_api.iam.api import openapi_specs as oa_specs
 from genesis_core.user_api.iam.clients import idp
 from genesis_core.user_api.iam.dm import models
 from genesis_core.user_api.iam import constants as c
 from genesis_core.user_api.iam import exceptions as iam_e
+
+iam_cli_opts = [
+    cfg.BoolOpt(
+        "captcha_required",
+        default=False,
+        help="Check captcha",
+    ),
+    cfg.StrOpt(
+        "captcha_salt",
+        default=common_c.DEFAULT_CAPTCHA_SALT,
+        help="Captcha salt",
+    ),
+    cfg.StrOpt(
+        "captcha_key",
+        default=common_c.DEFAULT_CAPTCHA_KEY,
+        help="Captcha key",
+    ),
+    cfg.IntOpt(
+        "captcha_expires",
+        default=10,
+        help="Captcha expires minutes",
+    ),
+    cfg.IntOpt(
+        "captcha_max_number",
+        default=100000,
+        help="Captcha max number",
+    ),
+]
+
+DOMAIN = "iam_api"
+CONF = cfg.CONF
+
+CONF.register_cli_opts(
+    iam_cli_opts,
+    DOMAIN,
+)
 
 
 class EnforceMixin:
@@ -45,6 +86,23 @@ class EnforceMixin:
     def enforce(self, rule, do_raise=False, exc=None):
         iam = contexts.get_context().iam_context
         return iam.enforcer.enforce(rule, do_raise, exc)
+
+
+class AltchaMixin:
+
+    def check_captcha(self, payload: str = None):
+        if not CONF[DOMAIN].captcha_required:
+            return
+        if not payload:
+            raise iam_e.CaptchaRequired()
+        verified, error = altcha.verify_solution(
+            json.loads(payload),
+            hmac_key=CONF[DOMAIN].captcha_key,
+            check_expires=True,
+        )
+        if not verified:
+            raise iam_e.CaptchaInvalid(error=error or "")
+        return True
 
 
 class ValidationException(ra_e.RestAlchemyException):
@@ -120,6 +178,7 @@ class UserController(
     controllers.BaseResourceControllerPaginated,
     EnforceMixin,
     ValidateSecretMixin,
+    AltchaMixin,
 ):
     __resource__ = resources.ResourceByModelWithCustomProps(
         models.User,
@@ -169,6 +228,7 @@ class UserController(
     )
 
     def create(self, **kwargs):
+        self.check_captcha(self.request.headers.get("payload"))
         self.validate_secret(kwargs)
         kwargs.pop("email_verified", None)
         user = super().create(**kwargs)
@@ -305,6 +365,17 @@ class UserController(
         raise iam_e.CanNotReadUser(
             uuid=resource.uuid, rule=c.PERMISSION_USER_READ_ALL
         )
+
+    @actions.get
+    def get_captcha(self, resource):
+        options = altcha.ChallengeOptions(
+            expires=datetime.datetime.now()
+            + datetime.timedelta(minutes=CONF[DOMAIN].captcha_expires),
+            max_number=CONF[DOMAIN].captcha_max_number,
+            hmac_key=CONF[DOMAIN].captcha_key,
+        )
+        challenge = altcha.create_challenge(options)
+        return challenge.__dict__
 
 
 class OrganizationController(

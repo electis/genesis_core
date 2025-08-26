@@ -60,6 +60,10 @@ skip_auth_endpoints = [
         "/actions/confirm_email/invoke",
         methods=[ra_c.POST],
     ),
+    iam_mw.EndpointComparator(
+        f"/v1/iam/users/({ra_types.UUID_RE_TEMPLATE})" "/actions/get_captcha",
+        methods=[ra_c.GET],
+    ),
 ]
 
 
